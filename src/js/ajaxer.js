@@ -226,13 +226,37 @@
 
         return (...args) => {
 
+            // Resolve the throttle BEFORE consulting the open window.
+            //
+            // The window is keyed by channel name, and one channel is routinely shared
+            // by call sites that want different throttles - e.g. a "searchbar" channel
+            // driven by an unthrottled keystroke handler, a 400ms infinite-scroll
+            // handler, and an initial page load on the global default. Checking the
+            // window first meant whoever armed it silently swallowed the next call from
+            // any other call site, including one that had just asked, via
+            // setThrottle(name, 0), for no throttling at all. That call was dropped
+            // outright: no request, no error, the caller none the wiser.
+            //
+            // Resolved into a local rather than reassigning the closed-over `timeout`,
+            // so a wrapper that is retained and invoked more than once keeps reading
+            // current settings instead of freezing the first value it ever saw.
+            const wait = Ajaxer.parseTime(timeout ?? Ajaxer.get("throttle["+name+"]") ?? Ajaxer.get("throttle"));
+
+            // Throttling explicitly off for this call: run it, and clear any window a
+            // previous throttled call left standing so it cannot outlive its purpose.
+            if (wait < 1) {
+
+                if (typeof throttleTimer[name] !== "undefined") clearTimeout(throttleTimer[name]);
+                throttleTimer[name] = undefined;
+
+                func.apply(this, args);
+                return;
+            }
+
             if (typeof throttleTimer[name] !== "undefined") return;
 
             func.apply(this, args);
-
-            timeout = Ajaxer.parseTime(timeout ?? Ajaxer.get("throttle["+name+"]") ?? Ajaxer.get("throttle"));
-            if(timeout < 1) throttleTimer[name] = undefined;
-            else throttleTimer[name] = setTimeout(() => { throttleTimer[name] = undefined; }, timeout);
+            throttleTimer[name] = setTimeout(() => { throttleTimer[name] = undefined; }, wait);
         };
     }
 
